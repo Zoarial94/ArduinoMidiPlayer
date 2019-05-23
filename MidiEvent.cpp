@@ -2,24 +2,22 @@
 //  MidiEvent.cpp
 //  Midi
 //
-//  Created by s804024 on 9/27/18.
-//  Copyright © 2018 Zoarial. All rights reserved.
-//
 
 #include "MidiEvent.hpp"
+#include <stdint.h>
 
-long Midi::Event::getTime() {
+unsigned long Midi::Event::getTime() {
   return timeOfEvent;
 }
 
-unsigned char Midi::Event::getLen() {
+uint8_t Midi::Event::getLen() {
   return lenOfData;
 }
 
-Midi::Event::Event(unsigned char event, unsigned char len) {
-  this->event = event;
-  this->channel = event & 0xF0;
-  data = new unsigned char[len];
+Midi::Event::Event(uint8_t* data, uint8_t len) : data(new uint8_t[len]) {
+  for (int i = 0; i < len; ++i) {
+    this->data[i] = data[i];
+  }
   lenOfData = len;
 }
 
@@ -29,44 +27,26 @@ Midi::Event::~Event() {
   }
 }
 
-char* Midi::Event::toString() {
-
-  char* p = new char[lenOfData];
-  for (int i = 0; i < lenOfData; i++) {
-    p[i] = data[i];
-  }
-
-  return p;
-
+const uint8_t* Midi::Event::toString() {
+  return data;
 }
 
-void Midi::Event::setData(char place, unsigned char data) {
-  if (place > lenOfData || place < 0) {
-    return;
-  }
-  this->data[place] = data;
-}
-
-void Midi::Event::setTime(long time) {
+void Midi::Event::setTime(unsigned long time) {
   this->timeOfEvent = time;
-}
-
-unsigned char Midi::Event::getEvent() {
-  return event;
-}
-
-int Midi::Event::getTrack() {
-  return track;
 }
 
 void Midi::Event::setTrack(int track) {
   this->track = track;
 }
 
-void Midi::Event::setRealTime(long time) {
+void Midi::Event::setRealTime(unsigned long time) {
   this->realTimeOfEvent = time;
 }
 
-long Midi::Event::getRealTime() {
+unsigned long Midi::Event::getRealTime() {
   return realTimeOfEvent;
+}
+
+uint8_t Midi::Event::getTrack() {
+  return track;
 }

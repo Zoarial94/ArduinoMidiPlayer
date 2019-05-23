@@ -2,123 +2,146 @@
 //  MidiFile.cpp
 //  MidiFile
 //
-//  Created by s804024 on 9/19/18.
-//  Copyright © 2018 Zoarial. All rights reserved.
-//
 
 
 #include "MidiFile.hpp"
 #include "MidiEvent.hpp"
-#include <SD.h>
+#include <MemoryFree.h>
+#include <stdint.h>
+#include <limits.h>
 
-Midi::MidiFile::MidiFile() {
+namespace Midi {
+
+MidiFile::MidiFile(int pin) {
 
   firstTime = true;
 
+  SSPin = pin;
+  pinMode(SSPin, OUTPUT);
+
   if (!SD.begin(53)) {
-    Serial.println("Card failed, or not present");
+    Serial2.println("Card failed, or not present");
     // don't do anything more:
     while (1);
   }
+  
   stopAllNotes();
+  setVars();
+  listsInitialized = false;
 }
 
-Midi::MidiFile::~MidiFile() {
-  delVars();
+MidiFile::~MidiFile() {
+  delLists();
 }
 
-void Midi::MidiFile::open(String str) {
-  if(midiFile) {
-    midiFile.close();
+bool MidiFile::open(String str) {
+  str = "midi/" + str;
+  stopAllNotes();
+  if (midiFile) {
+    close();
   }
-  midiFile = SD.open(str);
-  if (!midiFile) {
-    Serial.println("error opening " + str);
-    while (1);
+
+  if (!SD.exists(str)) {
+    Serial2.print(F("Error Opening: '"));
+    Serial2.print(str);
+    Serial2.println(F("'"));
+    openFile = false;
+  } else {
+    Serial2.print(F("Opening file: "));
+    midiFile = SD.open(str);
+    fileSize = midiFile.size();
+    Serial2.print(midiFile.name());
+    Serial2.print(F(" (Size: "));
+    Serial2.print(fileSize);
+    Serial2.println(F(")"));
+
+    //Get bytes for header
+    uint8_t header[8];
+    readFile(header, 8);
+
+    //Check if file is MIDI file
+    if (strncmp((char*)header, (char*)MIDIHEADER, 8) != 0) {
+      Serial2.println(F("NOT A MIDI FILE"));
+      Serial2.println(F("READ: "));
+      for (int i = 0; i < 8; ++i) {
+        Serial2.print(header[i], HEX);
+        Serial2.print("\t");
+      }
+      Serial2.println(F("\nACTUAL HEADER: "));
+      for (int i = 0; i < 8; ++i) {
+        Serial2.print(MIDIHEADER[i], HEX);
+        Serial2.print("\t");
+      }
+      openFile = false;
+    }
+    openFile = true;
   }
+  isReady = false;
+  return openFile;
 }
 
-void Midi::MidiFile::setup() {
-  delVars();
+bool MidiFile::setup() {
+  if (!openFile) {
+    Serial2.println("--NO OPEN FILE--");
+    return false;
+  }
+
+  delLists();
   setVars();
 
   //Get size of file
-  fileSize = midiFile.size();
-
-  //Get bytes for header
-  char * header = new char[8];
-  readFileToChar(header, 8);
-
-  //Check if file is MIDI file
-  if (strcmp(header, MIDIHEADER) == 0) {
-    Serial.println("Is a midi file");
-  } else {
-    Serial.println("Not a midi file");
-    while (1);
-  }
-
-  //Getting info on the MIDI file
+  midiFile.seek(8);
 
   //Get and read file type
-  readFileToChar(&fileType, 1); //Just zeros
-  readFileToChar(&fileType, 1); //Should be 0, 1, or 2
-  Serial.print(F("Midi Type: "));
-  Serial.println(fileType, BIN);
+  readFile(&fileType, 1); //Just zeros
+  readFile(&fileType, 1); //Should be 0, 1, or 2
+  Serial2.print(F("Midi Type: "));
+  Serial2.print(fileType, BIN);
   if (fileType == 1) {
-    Serial.println(F("(Multi-track sync)"));
+    Serial2.println(F("(Multi-track sync)"));
   } else if (fileType == 2) {
-    Serial.println(F("(Multi-track async)"));
+    Serial2.println(F("(Multi-track async)"));
+    return false;
   } else {
-    Serial.println(F("(Single track)"));
+    Serial2.println(F("(Single track)"));
+    return false;
   }
 
   //Get and read number of tracks
-  readFileToChar(&numOfTracks, 1);
-  readFileToChar(&numOfTracks, 1);
+  readFile(&numOfTracks, 1);
+  readFile(&numOfTracks, 1);
 
-  Serial.print(F("Number of tracks is: "));
-  Serial.println(numOfTracks);
+  Serial2.print(F("Number of tracks is: "));
+  Serial2.println(numOfTracks);
 
-  setLists();
+  setLists(); //Set lists now that we have track num
 
   //Get and read the Time Division
-  long tmp = 0;
-  readFileToLong(&tmp, 2);
-  timeDiv = tmp;
+  readFileToLong(&timeDiv, 2);
 
-  Serial.print(F("Time division: "));
-  Serial.println(timeDiv);
+  Serial2.print(F("Time division: "));
+  Serial2.println(timeDiv);
 
-  long BoTPlaces[numOfTracks];
+  unsigned long BoTPlaces[numOfTracks];
+  findInFile(TRACKHEADER, 4, BoTPlaces);
 
-  char tempStr[] = "MTrk";
-
-  findInFile(tempStr, 4, BoTPlaces);
-
-  EoTPlaces = new long[numOfTracks]; //Allocate space for EoTPlaces
-  eventsWaiting = new void*[numOfTracks]; //Allocate space for eventsWaiting
-  placeInTrack = new long[numOfTracks]; //Allocate space for placeInTrack
-  prevEvents = new unsigned char[numOfTracks];
-  trackCurrentTime = new long[numOfTracks];
-  trackStatus = new bool[numOfTracks];
-
-
-  findInFile(const_cast<unsigned char*>(endOfTrack), 3, EoTPlaces); //Find end of files
+  findInFile(endOfTrack, 3, EoTPlaces); //Find end of files
 
   for (int i = 0; i < numOfTracks; i++) {
     EoTPlaces[i] = EoTPlaces[i] + 3; //Add 3(Because endOfTrack is 3 long) to get the last byte of the track
     placeInTrack[i] = BoTPlaces[i] + 8;
     trackCurrentTime[i] = 0;
-    Serial.print(BoTPlaces[i]);
-    Serial.print(F(" to "));
-    Serial.println(EoTPlaces[i]);
+    Serial2.print(BoTPlaces[i]);
+    Serial2.print(F(" to "));
+    Serial2.println(EoTPlaces[i]);
   }
 
   for (int i = 0; i < numOfTracks; i++) {
-    eventsWaiting[i] = (void*)getEventAt(placeInTrack[i]);
+    eventsWaiting[i] = getEventAt(placeInTrack[i]);
   }
 
-  Serial.println(F("\nEND OF MIDI HEADER INFO\n\n"));
+  Serial2.println(F("END OF MIDI HEADER INFO"));
+  return true;
 }
 
 
@@ -126,111 +149,145 @@ void Midi::MidiFile::setup() {
 //1: Can send next event
 //2: Check next event for time and see if there is time to add to the queue
 //3:
-void Midi::MidiFile::loop() {
-  if(!isQEmpty()) { //If there is an event play it
-    Event* e = (Event*)eventQueue[0];
-    long currentTime = this->currentTime() - startTime;
-    float eventTime = getMilliFromDelta(e->getRealTime());
-    float targetTime = (eventTime + prevEventTime[e->getTrack()]);
-    /*Serial.print(F("Current Time: "));
-    Serial.println(currentTime);
-    Serial.print(F("Target Time: "));
-    Serial.println(targetTime);
-    Serial.print(F("Event Time: "));
-    Serial.println(eventTime);
-    Serial.print(F("Prev Event Time: "));
-    Serial.println(prevEventTime[e->getTrack()]);
-    Serial.println();*/
-    if (targetTime <= (float)currentTime) {
-      prevEventTime[e->getTrack()] += eventTime;
-      char* s = e->toString();
-      sendEvent(e->getEvent(), (unsigned char*)s, e->getLen());
-      delete s;
-      e = (Event*)first();
-      delete e;
-      /*bool sameTime = true;
-      while(sameTime && !isQEmpty()) {
-        char* s = e->toString();
-        sendEvent(e->getEvent(), (unsigned char*)s, e->getLen());
-        delete s;
-        e = (Event*)first();
-        delete e;
-        
-        e = (Event*)eventQueue[0];
-        eventTime = getMilliFromDelta(e->getTime());
-        if(eventTime <= (float)currentTime) {
-          sameTime = true;
-        } else {
-          sameTime = false;
-        }
-      }*/
-    }
+void MidiFile::loop() {
+  if (paused || !isReady) {
+    return;
   }
-  if(!tracksAreDone && canPush()) { //If there is an event left in the queue and file... see if it can go into queue
-    //Serial.println("Checking for time...");
-    Event* e = (Event*)eventQueue[0];
-    long currentTime = this->currentTime() - startTime;
-    float eventTime = getMilliFromDelta(e->getTime());
-    float targetTime = (eventTime + prevEventTime[e->getTrack()]);
-    if ((targetTime - currentTime) >= 6 && !eventQueue.isFull()) {
-      //Serial.println("Adding event to queue");
+  //Serial2.println(numInEvent());  //Print number of items in queue
+  float eventTime;
+  float realEventTime;
+  float prevTime;
+  float targetTime;
+  unsigned long currentTime2;
+  if (!isQEmpty()) { //If there is an event play it
+    Event* e = eventQueue[0];
+    
+    eventTime = getMilliFromDelta(e->getRealTime());
+    prevTime = prevEventTime[e->getTrack()];
+    currentTime2 = currentTime();
+    if (scaleChange > prevTime) {
+      float diff = scaleChange - prevTime;
+      realEventTime = diff + ((eventTime - diff) / scale);
+      Serial2.println(realEventTime);
+    } else {
+      realEventTime = eventTime / scale;
+    }
+    targetTime = realEventTime + prevTime;
+    
+    bool sameTime;
+    if (targetTime <= (float)currentTime2) {
+      sameTime = true;
+    } else {
+      sameTime = false;
+    }
+    while (sameTime && !isQEmpty()) {
+      prevEventTime[e->getTrack()] += realEventTime;
+      sendEvent(e->toString(), e->getLen());
+      e = pop();
+      delete e;
+
+      e = eventQueue[0];
+      
+      eventTime = getMilliFromDelta(e->getRealTime());
+      prevTime = prevEventTime[e->getTrack()];
+      if (scaleChange > prevTime) {
+        float diff = scaleChange - prevTime;
+        realEventTime = diff + ((eventTime - diff) / scale);
+      } else {
+        realEventTime = eventTime / scale;
+      }
+      targetTime = realEventTime + prevTime;
+      
+      if (targetTime <= currentTime2) {
+        sameTime = true;
+      } else {
+        sameTime = false;
+      }
+    }
+  } else {
+    push(nextEvent());
+  }
+  if (!tracksAreDone && canPush()) { //If there is an event left in the file... see if it can go into queue
+    //Serial2.println("Checking for time...");
+    Event* e = eventQueue[0];
+    eventTime = getMilliFromDelta(e->getTime());
+    prevTime = prevEventTime[e->getTrack()];
+    if (scaleChange > prevTime) {
+      float diff = scaleChange - prevTime;
+      realEventTime = diff + ((eventTime - diff) / scale);
+    } else {
+      realEventTime = eventTime / scale;
+    }
+    targetTime = realEventTime + prevTime;
+    if ((targetTime - (float)currentTime()) >= 6 && !eventQueue.isFull()) {
+      //Serial2.println("Adding event to queue");
       push(nextEvent());
     } else {
-      //Serial.println("Not time to add to queue");
+      //Serial2.println("Not time to add to queue");
     }
-  } else if(tracksAreDone && isQEmpty()) { //If there are no events... finish the file
-    //Serial.println(F("MIDI IS FINISHED"));
+  } else if (tracksAreDone && isQEmpty()) { //If there are no events... finish the file
+    //Serial2.println(F("MIDI IS FINISHED"));
     midiIsFinished = true;
   }
-  //Serial.print(F("Size of queue: "));
-  //Serial.println(numInEvent());
+  //Serial2.print(F("Size of queue: "));
+  //Serial2.println(numInEvent());
 }
 
+bool MidiFile::start() {
 
+  stopAllNotes();
+  isReady = setup();
 
+  if (!isReady) {
+    startTime = -1;
+    return false;
+  }
 
-void Midi::MidiFile::start() {
-  setup();
   while (!eventQueue.isFull()) {
     push(nextEvent());
   }
-  startTime = currentTime();
+
+  startTime = millis();
+  paused = false;
+  midiIsFinished = false;
+
+  return true;
 }
 
-void* Midi::MidiFile::nextEvent() {
+Event* MidiFile::nextEvent() {
 
-  char chosenTrack = 0;
-  unsigned long earliestTime = 2147483647;
+  uint8_t chosenTrack = 0;
+  unsigned long earliestTime = ULONG_MAX;
   for (int i = 0; i < numOfTracks; i++) {
-    if(trackStatus[i]) {
-      long eventTime = ((Event*)eventsWaiting[i])->getTime();
+    if (trackStatus[i]) {
+      unsigned long eventTime = eventsWaiting[i]->getTime();
       if (earliestTime > eventTime) {
         chosenTrack = i;
         earliestTime = eventTime;
       }
     }
   }
-  void* chosenEvent = eventsWaiting[chosenTrack];
+  Event* chosenEvent = eventsWaiting[chosenTrack];
   eventsWaiting[chosenTrack] = getEventAt(placeInTrack[chosenTrack]);
   return chosenEvent;
 }
 
-void* Midi::MidiFile::getEventAt(long place) {
-  unsigned char trackNum = -1;
+Event* MidiFile::getEventAt(unsigned long place) {
+  uint8_t trackNum = -1;
   for (int i = numOfTracks - 1; i >= 0; i--) {
     if (place < EoTPlaces[i]) {
       trackNum = i;
     }
   }
 
-  if(!trackStatus[trackNum]) {
+  if (!trackStatus[trackNum]) {
     return nullptr;
   }
 
   midiFile.seek(place);
 
-  unsigned char event = 0;
-  long deltaTime = 0;
+  uint8_t event = 0;
+  unsigned long deltaTime = 0;
 
   Event* eventInstance;
 
@@ -239,14 +296,14 @@ void* Midi::MidiFile::getEventAt(long place) {
   event = peek(); //Peek at next byte
   if (!(event >= 0x80)) { //If it is not an event, use previous event.
 
-    eventInstance = (Event*)handleEvent(&(prevEvents[trackNum]));
-    checkForEoT((int)trackNum);
+    eventInstance = handleEvent(&(prevEvents[trackNum]));
+    checkForEoT(trackNum);
   } else { //If it is an event, handle event and set previousEvent
 
-    readFileToChar(&event, 1);
-    eventInstance = (Event*)handleEvent(&event);
+    readFile(&event, 1);
+    eventInstance = handleEvent(&event);
     prevEvents[trackNum] = event;
-    checkForEoT((int)trackNum);
+    checkForEoT(trackNum);
   }
 
   if (eventInstance != NULL) {
@@ -256,11 +313,11 @@ void* Midi::MidiFile::getEventAt(long place) {
     placeInTrack[trackNum] = midiFile.position();
     return eventInstance;
   } else {
-    return getEventAt((long)(midiFile.position()));
+    return getEventAt(midiFile.position());
   }
 }
 
-void* Midi::MidiFile::handleEvent(unsigned char * event) {
+Event* MidiFile::handleEvent(uint8_t* event) {
   unsigned char eventID = *event & 0xF0; //First 4 bits give event
   unsigned char channel = *event & 0x0F; //Last 4 bits gives channel number
   if (eventID == 0x80) {           //Note Off
@@ -277,201 +334,213 @@ void* Midi::MidiFile::handleEvent(unsigned char * event) {
     return channelAftertouch(channel);
   } else if (eventID == 0xE0) {    //Pitch Wheel Range
     return pitchWheelRange(channel);
-  } else if ((int)*event == 0xF0) { //System Exclusive
+  } else if (*event == 0xF0) { //System Exclusive
     return systemExclusive(event);
-  } else if ((int)*event == 0xF7) { //System Exclusive 'Escape'
+  } else if (*event == 0xF7) { //System Exclusive 'Escape'
     return systemExclusive(event);
-  } else if ((int)*event == 0xFF) { //Meta Event
+  } else if (*event == 0xFF) { //Meta Event
     return metaEvent();
   } else {                          //Invalid Event
+    return nullptr;
   }
-  return nullptr;
 }
 
-bool Midi::MidiFile::canPush() {
-  return !eventQueue.isFull();
-}
-
-bool Midi::MidiFile::push(void* pointer) {
-  //Serial.print(F("Pushing event with time: "));
-  //Serial.println(((Event*)pointer)->getTime());
-  return eventQueue.push(pointer);
-}
-
-void* Midi::MidiFile::pop() {
-  return eventQueue.shift();
-}
-
-void* Midi::MidiFile::first() {
-  return eventQueue.shift();
-}
-
-long Midi::MidiFile::currentTime() {
-  return millis();
-}
-
-void Midi::MidiFile::sendEvent(unsigned char event, unsigned char* data, int len) {
-  /*Serial.print(event, HEX);
-  Serial.print(F(": "));
-  for(int i = 0; i < len; i++) {
-    Serial.print(data[i], HEX);
-    Serial.print(F(" "));
-  }
-  Serial.println();*/
-  if (event >= 0x80) {
-    if (event == prevSentEvent) {
-      for (int i = 0; i < len; i++) {
+void MidiFile::sendEvent(const uint8_t* data, int len) {
+  /*Serial2.print(data[0], HEX);
+    Serial2.print(F(": "));
+    for (int i = 1; i < len; i++) {
+    Serial2.print(data[i], HEX);
+    Serial2.print(F(" "));
+    }
+    Serial2.println();*/
+  if (data[0] >= 0x80) {
+    if (data[0] == prevSentEvent) {
+      for (int i = 1; i < len; i++) {
         Serial1.write(data[i]);
       }
     } else {
-      Serial1.write(event);
       for (int i = 0; i < len; i++) {
         Serial1.write(data[i]);
       }
     }
-    if (event == 0xFF && data[0] == 0x51) {
-      Serial.println(F("TEMPO CHANGE"));
+    if (data[0] == 0xFF && data[1] == 0x51) {
       uSecPerQuarterNote = 0;
-      uSecPerQuarterNote = (uSecPerQuarterNote << 8) | (long)data[1];
       uSecPerQuarterNote = (uSecPerQuarterNote << 8) | (long)data[2];
       uSecPerQuarterNote = (uSecPerQuarterNote << 8) | (long)data[3];
-    } else if (data[0] == 0x58) {
-      numerator = data[1];
-      denominator = pow(2, data[2]);
+      uSecPerQuarterNote = (uSecPerQuarterNote << 8) | (long)data[4];
+    } else if (data[0] == 0xFF && data[1] == 0x58) {
+      numerator = data[2];
+      denominator = pow(2, data[3]);
     }
   }
 }
 
-float Midi::MidiFile::getMilliFromDelta(long delta) {
+float MidiFile::getMilliFromDelta(unsigned long delta) {
   if (uSecPerQuarterNote != 0) {
     float f = 0;
-    f = delta * (((float)uSecPerQuarterNote / 1000.0f) / (float)timeDiv);
+    f = (float)delta * (((float)uSecPerQuarterNote / (float)1000) / (float)timeDiv);
     return f;
-    /*float kMillisecondsPerQuarterNote = uSecPerQuarterNote / 1000.0f;
-    float kMillisecondsPerTick = kMillisecondsPerQuarterNote / timeDiv;
-    float deltaTimeInMilliseconds = delta * kMillisecondsPerTick;
-    Serial.print(F("EVENT TIME IN FUNCTION: "));
-    Serial.println(deltaTimeInMilliseconds);
-    return (long)deltaTimeInMilliseconds;*/
   } else {
     return delta;
   }
 }
 
-void Midi::MidiFile::stopAllNotes() {
-  for(int i = 0; i < 16; i++) {
+void MidiFile::stopAllNotes() {
+  for (int i = 0; i < 16; i++) {
     Serial1.write(0xB0 + i);
     Serial1.write(0x7B);
     Serial1.write(0x00);
   }
 }
 
-bool Midi::MidiFile::isQEmpty() {
-  return eventQueue.isEmpty();
-}
-
-int Midi::MidiFile::numInEvent() {
-  return eventQueue.size();
-}
-
-bool Midi::MidiFile::isFinished() {
+bool MidiFile::isFinished() {
   return midiIsFinished;
 }
 
-long Midi::MidiFile::filePos() {
-  return midiFile.position();
+bool MidiFile::isFileReady() {
+  return isReady;
 }
 
-void Midi::MidiFile::checkForEoT(int trackNum) {
-  if(filePos() == EoTPlaces[trackNum]) {
-      trackStatus[trackNum] = 0;
+void MidiFile::checkForEoT(uint8_t trackNum) {
+  if (filePos() == EoTPlaces[trackNum]) {
+    trackStatus[trackNum] = 0;
+  }
+  tracksAreDone = 1;
+  for (int i = 0; i < numOfTracks; i++) {
+    if (trackStatus[i]) {
+      tracksAreDone = 0;
+      return;
     }
-    tracksAreDone = 1;
-    for(int i = 0; i < numOfTracks; i++) {
-      if(trackStatus[i]) {
-         tracksAreDone = 0;
-      }
-    }
+  }
 }
 
-void Midi::MidiFile::setVars() {
+void MidiFile::setVars() {
   fileType = 0;
-  numOfTracks = 0;
+  numOfTracks = -1;
   timeDiv = 0;
   uSecPerQuarterNote = 500000;
   numerator = 0;
   denominator = 0;
-  nextEventTrack = 0;
-  nextEventPrevTime = 0;
-  nextEventTracksChecked = 0;
   tracksAreDone = false;
+  midiIsFinished = false;
+  isReady = false;
+  paused = false;
+  scale = 1;
+  scaleChange = 0;
+}
+
+void MidiFile::setLists() {
+
+  if (!listsInitialized && numOfTracks != -1) {
+
+    listsInitialized = true;
+
+    EoTPlaces = new unsigned long[numOfTracks]; //Allocate space for EoTPlaces
+    eventsWaiting = new Event*[numOfTracks]; //Allocate space for eventsWaiting
+    placeInTrack = new unsigned long[numOfTracks]; //Allocate space for placeInTrack
+    prevEvents = new uint8_t[numOfTracks];
+    trackCurrentTime = new unsigned long[numOfTracks];
+    trackStatus = new bool[numOfTracks];
+    prevEventTime = new float[numOfTracks];
+  }
+  if (listsInitialized) {
+    for (int i = 0; i < numOfTracks; i++) {
+      EoTPlaces[i] = 0;
+      eventsWaiting[i] = 0;
+      placeInTrack[i] = 0;
+      prevEvents[i] = 0;
+      trackCurrentTime[i] = 0;
+      trackStatus[i] = 1;
+      prevEventTime[i] = 0;
+    }
+  }
+}
+
+void MidiFile::delLists() {
+
+  if (numOfTracks != UINT8_MAX) {
+    if (*eventsWaiting) {
+      for (int i = 0; i < numOfTracks; i++) {
+        Event* e = eventsWaiting[i];
+        if (e) {
+          delete e;
+        }
+      }
+      delete [] eventsWaiting;
+    }
+  }
+
+  if (listsInitialized) {
+
+    delete [] EoTPlaces;
+
+    delete [] placeInTrack;
+
+    delete [] prevEvents;
+
+    delete [] trackCurrentTime;
+
+    delete [] trackStatus;
+
+    delete [] prevEventTime;
+  }
+
+  int numOfEvents = numInEvent();
+  for (int i = 0; i < numOfEvents; i++) {
+    Event* e = pop();
+    delete (e);
+  }
+  listsInitialized = false;
+}
+
+void MidiFile::command(char* command, unsigned int len) {
+  if (strncmp(command, "pause", 5) == 0) {              //PAUSE
+    pause();
+  } else if (strncmp(command, "resume", 6) == 0) {      //RESUME
+    resume();
+  } else if (strncmp(command, "open ", 5) == 0) {       //OPEN
+    String str;
+    for (int i = 0; i < len - 5; ++i) {
+      str.concat(command[5 + i]);
+    }
+    if(!strstr(str.c_str(), ".mid")) {
+      str.concat(".mid");
+    }
+    open(str);
+  } else if (strncmp(command, "scale ", 6) == 0) {      //SCALE
+    String str;
+    for (int i = 0; i < len - 6; ++i) {
+      str.concat(command[6 + i]);
+    }
+    scale = str.toFloat();
+    scaleChange = millis();
+    Serial2.print(F("Scaling: "));
+    Serial2.println(scale, 4);
+  } else if (strncmp(command, "start", 5) == 0) {       //START
+    start();
+  } else if (strncmp(command, "close", 5) == 0) {       //CLOSE
+    close();
+  } else if (strncmp(command, "list", 4) == 0) {        //LIST
+    list();
+  } else {                                              //ELSE
+    Serial2.print(F("Failed Command: '"));
+    for (int i = 0; i < len; ++i) {
+      Serial2.print(command[i]);
+    }
+    Serial2.println("'");
+  }
+}
+
+void MidiFile::close() {
+  stopAllNotes();
+  if (midiFile) {
+    Serial2.print(F("Closing file: "));
+    Serial2.println(midiFile.name());
+    midiFile.close();
+    openFile = false;
+    isReady = false;
+  }
   midiIsFinished = false;
 }
 
-void Midi::MidiFile::setLists() {
-  
-  EoTPlaces = new long[numOfTracks]; //Allocate space for EoTPlaces
-  eventsWaiting = new void*[numOfTracks]; //Allocate space for eventsWaiting
-  placeInTrack = new long[numOfTracks]; //Allocate space for placeInTrack
-  prevEvents = new unsigned char[numOfTracks];
-  trackCurrentTime = new long[numOfTracks];
-  trackStatus = new bool[numOfTracks];
-  prevEventTime = new float[numOfTracks];
-
-  for(int i = 0; i < numOfTracks; i++) {
-    EoTPlaces[i] = 0;
-    eventsWaiting[i] = 0;
-    placeInTrack[i] = 0;
-    prevEvents[i] = 0;
-    trackCurrentTime[i] = 0;
-    trackStatus[i] = 0;
-    prevEventTime[i] = 0;
-  }
-}
-
-void Midi::MidiFile::delVars() {
-  if(firstTime) {
-    firstTime = false;
-    return;
-  }
-  if (*EoTPlaces) {
-    delete [] EoTPlaces;
-  }
-  
-  if (*placeInTrack) {
-    delete [] placeInTrack;
-  }
-  
-  if (*eventsWaiting) {
-    for (int i = 0; i < numOfTracks; i++) {
-      void* e = eventsWaiting[i];
-      if (e) {
-        delete (Event*)e;
-      }
-    }
-    delete [] eventsWaiting;
-  }
-  
-  if (*prevEvents) {
-    delete [] prevEvents;
-  }
-  
-  if (*trackCurrentTime) {
-    delete [] trackCurrentTime;
-  }
-
-  if (*trackStatus) {
-    delete [] trackStatus;
-  }
-
-  if (*prevEventTime) {
-    delete [] prevEventTime;
-  }
-  
-  int numOfEvents = numInEvent();
-  for (int i = 0; i < numOfEvents; i++) {
-    Event* e = (Event*)pop();
-    delete (e);
-  }
-}
-
+} //Namespace Midi

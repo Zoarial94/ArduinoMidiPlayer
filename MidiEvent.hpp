@@ -2,45 +2,38 @@
 //  MidiEvent.hpp
 //  Midi
 //
-//  Created by s804024 on 9/27/18.
-//  Copyright © 2018 Zoarial. All rights reserved.
-//
 
 #ifndef MidiEvent_hpp
 #define MidiEvent_hpp
 
-#include "MidiFile.hpp"
+#include <stdint.h>
 
-class Midi::Event {
+namespace Midi {
+class Event {
 
   protected:
-    char event;
-    char channel;
-    long timeOfEvent;
-    unsigned char* data;
-    unsigned char lenOfData;
-    long timeDiv;
-    int track;
-    long realTimeOfEvent;
+    unsigned long timeOfEvent;      //
+    uint8_t* data;                  // event + data
+    uint8_t lenOfData;              //Length of data
+    unsigned long timeDiv;          //
+    uint8_t track;                  //What track is event on
+    unsigned long realTimeOfEvent;  //
 
 
   public:
 
-    Event(unsigned char event, unsigned char len);
+    Event(uint8_t* data, uint8_t len);
     ~Event();
-    unsigned char getLen();
-    void setTime(long time);
-    long getTime();
-    void setRealTime(long time);
-    long getRealTime();
-    char* toString();
-    void setData(char place, unsigned char data);
-    unsigned char getEvent();
-    int getTrack();
+    uint8_t getLen();
+    void setTime(unsigned long time);
+    unsigned long getTime();
+    void setRealTime(unsigned long time);
+    unsigned long getRealTime();
+    const uint8_t* toString();
+    uint8_t getTrack();
     void setTrack(int track);
 
 };
+}
 
 #endif /* MidiEvent_hpp */
-
-

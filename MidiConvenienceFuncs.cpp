@@ -2,38 +2,26 @@
 //  MidiConvenienceFuncs.cpp
 //  Midi
 //
-//  Created by s804024 on 9/24/18.
-//  Copyright © 2018 Zoarial. All rights reserved.
-//
 
 #include "MidiFile.hpp"
 #include <SD.h>
+#include <stdint.h>
 
-void Midi::MidiFile::readFileToChar(unsigned char * chars, int numOfBytes) {
-  midiFile.read(chars, numOfBytes);
-}
+namespace Midi {
 
-void Midi::MidiFile::readFileToChar(char * chars, int numOfBytes) {
-  midiFile.read(chars, numOfBytes);
-}
-
-void Midi::MidiFile::readFileToLong(long * num, int numOfBytes) {
+void MidiFile::readFileToLong(unsigned long* num, int numOfBytes) {
   char * temp = new char[numOfBytes];
   midiFile.read(temp, numOfBytes);
   for (int i = 0; i < numOfBytes; i++) {
     (*num) = (*num) << 8;
-    (*num) = (*num) | ((long)((temp)[i]) & 0xFF);
+    (*num) = (*num) | ((unsigned long)((temp)[i]) & 0xFF);
   }
-  delete temp;
+  delete [] temp;
 }
 
-unsigned char Midi::MidiFile::peek() {
-  return midiFile.peek();
-}
-
-void Midi::MidiFile::readVarLen(long * value) {
-  unsigned char c;
-  long tempValue = 0;
+void MidiFile::readVarLen(unsigned long* value) {
+  uint8_t c;
+  unsigned long tempValue = 0;
   if ( (tempValue = midiFile.read()) & 0x80 ) {
     tempValue &= 0x7F;
     do {
@@ -43,18 +31,18 @@ void Midi::MidiFile::readVarLen(long * value) {
   *value = tempValue;
 }
 
-void Midi::MidiFile::findInFile(unsigned char * str, int len, long * places) {
-  long starting = midiFile.position();
-  long ending = fileSize;
-  long * pos = new long[numOfTracks];
-  char buf[len];
-  int curPlaceInBuf = 0;
-  long curPos = starting;
+void MidiFile::findInFile(const uint8_t* data, int len, unsigned long* places) {
+  unsigned long starting = filePos();
+  unsigned long ending = fileSize;
+  unsigned long * pos = new unsigned long[numOfTracks];
+  uint8_t buf[len];
+  uint8_t curPlaceInBuf = 0;
+  unsigned long curPos = starting;
   for (int i = 0; i < ((ending - starting) - (len - 1)); i++) {
     midiFile.seek(curPos);
-    readFileToChar(buf, len);
+    readFile(buf, len);
     for (int j = 0; j < len; j++) {
-      if (buf[j] == (char)str[j]) {
+      if (buf[j] == data[j]) {
         if (j == len - 1) {
           pos[curPlaceInBuf] = curPos;
           curPlaceInBuf++;
@@ -68,27 +56,28 @@ void Midi::MidiFile::findInFile(unsigned char * str, int len, long * places) {
   for (int i = 0; i < numOfTracks; i++) {
     places[i] = pos[i];
   }
+  delete [] pos;
   midiFile.seek(starting);
 }
 
-void Midi::MidiFile::printFileInBits(long num, String type) {
-    unsigned char bits = 0;
-    for(int i = 0; i<num; i++) {
-        bits=midiFile.read();
-       Serial.print(bits, BIN);
-       Serial.print(F("("));
-        if(type == "ascii") {
-            Serial.print(bits);
-        } if(type == "int") {
-            Serial.print(bits, DEC);
-        } if(type == "hex") {
-            Serial.print(bits, HEX);
-        } else {
-            Serial.print(F(" "));
-        }
-        Serial.print(F(") "));
+void MidiFile::printFileInBits(unsigned long num, String type) {
+  uint8_t bits = 0;
+  for (int i = 0; i < num; i++) {
+    bits = midiFile.read();
+    Serial2.print(bits, BIN);
+    Serial2.print(F("("));
+    if (type == "ascii") {
+      Serial2.print(bits);
+    } if (type == "int") {
+      Serial2.print(bits, DEC);
+    } if (type == "hex") {
+      Serial2.print(bits, HEX);
+    } else {
+      Serial2.print(F(" "));
     }
-    Serial.println();
-    midiFile.seek((long)fileSize-(long)num);
+    Serial2.print(F(") "));
+  }
+  Serial2.println();
+  midiFile.seek((unsigned long)fileSize - (unsigned long)num);
 }
-
+}
