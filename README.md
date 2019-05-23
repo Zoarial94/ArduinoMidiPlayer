@@ -3,10 +3,6 @@ With a connected SD Card Reader, the arduino can output midi events
 
 ***THIS LIBRARY IS A WIP AND IS NOT FULLY FUNCTIONAL***
 
-***THIS LIBRARY WILL ONLY WORK WITH ONE FILE BEFORE BREAKING***
-
-***THERE WILL BE MEMORY LEAKS***
-
 ***ONLY WORKS WITH TYPE 1 MIDI FILES***
 
 To use this code you first need a couple of items:
@@ -18,10 +14,11 @@ To use this code you first need a couple of items:
 
 ## Usage
 
-* This library uses the Arduino SD library so attach your reader accordingly. (Pin 53 is chip select)
+* This library uses the Arduino SD library so attach your reader accordingly. (Chip select pin must be given during construction)
 * Next connect the midi header into the arduino using Serial1 as the output
+* Connect bluetooth module using Serial2
 * Load midi files onto SD Card
-* Look at *Midi3.0.ino* for example usage
+* Look at *Midi4.0.ino* for example usage
 
 ## Features
 
@@ -31,9 +28,10 @@ To use this code you first need a couple of items:
 * Sends meta events
 * Will correct for tempo changes
 * A loop function which needs to be regularly called
+* Pause and continue functions
+* Commands allow for opening and closing files, starting, and pausing payback
 
 ## Future Features
 
-* No memory leaks and better optimizations
-* Pause and continue
+* Better optimizations
 * Manual tempo change
